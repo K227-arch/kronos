@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.eggs
+dist
+build
+*.egg
+
+# Virtual environments
+venv
+.venv
+env
+
+# IDE
+.vscode
+.idea
+.kiro
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Examples and tests (not needed in production image)
+examples/
+tests/
+finetune/
+finetune_csv/
+figures/
+
+# Data files (mounted as volume instead)
+data/
+
+# Prediction results (mounted as volume)
+webui/prediction_results/
+
+# Docs
+README.md
+LICENSE

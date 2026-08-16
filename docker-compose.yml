@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  kronos-webui:
+    build: .
+    container_name: kronos-webui
+    ports:
+      - "7070:7070"
+    volumes:
+      # Persist HuggingFace model cache so downloads survive restarts
+      - hf-cache:/app/.cache/huggingface
+      # Mount local data directory for CSV/feather files
+      - ./data:/app/data
+      # Persist prediction results
+      - ./webui/prediction_results:/app/webui/prediction_results
+    environment:
+      - HF_HOME=/app/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
