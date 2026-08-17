@@ -303,27 +303,9 @@ def create_prediction_chart(df, pred_df, lookback, pred_len, actual_df=None, his
         yaxis_title='Price',
         template='plotly_white',
         height=600,
-        showlegend=True
+        showlegend=True,
+        xaxis_rangeslider_visible=False
     )
-    
-    # Ensure x-axis time continuity
-    if 'timestamps' in historical_df.columns:
-        # Get all timestamps and sort them
-        all_timestamps = []
-        if len(historical_df) > 0:
-            all_timestamps.extend(historical_df['timestamps'])
-        if 'pred_timestamps' in locals():
-            all_timestamps.extend(pred_timestamps)
-        if 'actual_timestamps' in locals():
-            all_timestamps.extend(actual_timestamps)
-        
-        if all_timestamps:
-            all_timestamps = sorted(all_timestamps)
-            fig.update_xaxes(
-                range=[all_timestamps[0], all_timestamps[-1]],
-                rangeslider_visible=False,
-                type='date'
-            )
     
     return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
 
@@ -337,6 +319,51 @@ def get_data_files():
     """Get available data file list"""
     data_files = load_data_files()
     return jsonify(data_files)
+
+@app.route('/api/upload-data', methods=['POST'])
+def upload_data():
+    """Upload a data file from the user's browser"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        # Validate file extension
+        allowed_extensions = ('.csv', '.feather')
+        if not file.filename.lower().endswith(allowed_extensions):
+            return jsonify({'error': f'Unsupported file type. Allowed: {allowed_extensions}'}), 400
+
+        # Save to data directory
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        os.makedirs(data_dir, exist_ok=True)
+
+        # Secure the filename
+        filename = file.filename.replace('\\', '/').split('/')[-1]
+        file_path = os.path.join(data_dir, filename)
+        file.save(file_path)
+
+        # Validate the file contents
+        df, error = load_data_file(file_path)
+        if error:
+            os.remove(file_path)
+            return jsonify({'error': f'Invalid file: {error}'}), 400
+
+        file_size = os.path.getsize(file_path)
+        return jsonify({
+            'success': True,
+            'message': f'File "{filename}" uploaded successfully',
+            'file': {
+                'name': filename,
+                'path': file_path,
+                'size': f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.1f} MB"
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
 @app.route('/api/load-data', methods=['POST'])
 def load_data():

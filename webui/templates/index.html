@@ -490,6 +490,15 @@
                     <small class="form-text">Select K-line data file from data directory</small>
                 </div>
 
+                <div class="form-group" style="margin-top: 10px;">
+                    <label for="file-upload">Or Upload from Your Computer:</label>
+                    <input type="file" id="file-upload" accept=".csv,.feather" style="display: block; width: 100%; padding: 10px; border: 2px dashed #667eea; border-radius: 8px; font-size: 14px; margin: 8px 0; background: #f7fafc; cursor: pointer;">
+                    <button id="upload-btn" class="btn btn-secondary" onclick="uploadFile()">
+                        ⬆️ Upload File
+                    </button>
+                    <small class="form-text">Supports .csv and .feather files with open, high, low, close columns</small>
+                </div>
+
                 <button id="load-data-btn" class="btn btn-secondary">
                     📁 Load Data
                 </button>
@@ -578,7 +587,7 @@
 
             <div class="chart-container">
                 <h2>📈 Prediction Results Chart</h2>
-                <div id="chart"></div>
+                <div id="chart" style="min-height: 600px;"></div>
                 
                 <!-- Comparison Analysis -->
                 <div id="comparison-section" class="comparison-section" style="display: none;">
@@ -770,6 +779,47 @@
             } catch (error) {
                 console.error('❌ Failed to load data file list:', error);
                 showStatus('error', 'Failed to load data file list');
+            }
+        }
+
+        // Upload file from browser
+        async function uploadFile() {
+            const fileInput = document.getElementById('file-upload');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                showStatus('error', 'Please select a file to upload');
+                return;
+            }
+
+            try {
+                showLoading(true);
+                document.getElementById('upload-btn').disabled = true;
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await axios.post('/api/upload-data', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+
+                if (response.data.success) {
+                    showStatus('success', response.data.message);
+                    // Refresh the file list and auto-select the uploaded file
+                    await loadDataFiles();
+                    const dataFileSelect = document.getElementById('data-file-select');
+                    dataFileSelect.value = response.data.file.path;
+                    // Clear the file input
+                    fileInput.value = '';
+                } else {
+                    showStatus('error', response.data.error);
+                }
+            } catch (error) {
+                console.error('❌ Upload failed:', error);
+                showStatus('error', `Upload failed: ${error.response?.data?.error || error.message}`);
+            } finally {
+                showLoading(false);
+                document.getElementById('upload-btn').disabled = false;
             }
         }
 
@@ -1099,8 +1149,8 @@
         // Display prediction results
         function displayPredictionResult(result) {
             // Display chart
-            const chartData = JSON.parse(result.chart);
-            Plotly.newPlot('chart', chartData.data, chartData.layout);
+            const chartData = typeof result.chart === 'string' ? JSON.parse(result.chart) : result.chart;
+            Plotly.newPlot('chart', chartData.data, chartData.layout, {responsive: true});
             
             // Display comparison analysis (if actual data exists)
             if (result.has_comparison) {
