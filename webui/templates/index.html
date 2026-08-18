@@ -483,21 +483,17 @@
 
                 <!-- Data File Selection -->
                 <div class="form-group">
-                    <label for="data-file-select">Select Data File:</label>
-                    <select id="data-file-select">
-                        <option value="">Please load data file list first</option>
-                    </select>
-                    <small class="form-text">Select K-line data file from data directory</small>
-                </div>
-
-                <div class="form-group" style="margin-top: 10px;">
-                    <label for="file-upload">Or Upload from Your Computer:</label>
+                    <label for="file-upload">Upload Data File:</label>
                     <input type="file" id="file-upload" accept=".csv,.feather" style="display: block; width: 100%; padding: 10px; border: 2px dashed #667eea; border-radius: 8px; font-size: 14px; margin: 8px 0; background: #f7fafc; cursor: pointer;">
                     <button id="upload-btn" class="btn btn-secondary" onclick="uploadFile()">
                         ⬆️ Upload File
                     </button>
                     <small class="form-text">Supports .csv and .feather files with open, high, low, close columns</small>
                 </div>
+
+                <select id="data-file-select" style="display: none;">
+                    <option value="">Please select data file</option>
+                </select>
 
                 <button id="load-data-btn" class="btn btn-secondary">
                     📁 Load Data
@@ -811,6 +807,8 @@
                     dataFileSelect.value = response.data.file.path;
                     // Clear the file input
                     fileInput.value = '';
+                    // Auto-load the uploaded data
+                    await loadData();
                 } else {
                     showStatus('error', response.data.error);
                 }

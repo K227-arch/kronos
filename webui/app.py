@@ -92,12 +92,12 @@ def load_data_file(file_path):
         
         # Process timestamp column
         if 'timestamps' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['timestamps'])
+            df['timestamps'] = pd.to_datetime(df['timestamps'], utc=True).dt.tz_localize(None)
         elif 'timestamp' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['timestamp'])
+            df['timestamps'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_localize(None)
         elif 'date' in df.columns:
             # If column name is 'date', rename it to 'timestamps'
-            df['timestamps'] = pd.to_datetime(df['date'])
+            df['timestamps'] = pd.to_datetime(df['date'], utc=True).dt.tz_localize(None)
         else:
             # If no timestamp column exists, create one
             df['timestamps'] = pd.date_range(start='2024-01-01', periods=len(df), freq='1H')
@@ -208,106 +208,87 @@ def save_prediction_results(file_path, prediction_type, prediction_results, actu
 
 def create_prediction_chart(df, pred_df, lookback, pred_len, actual_df=None, historical_start_idx=0):
     """Create prediction chart"""
-    # Use specified historical data start position, not always from the beginning of df
+    # Use specified historical data start position
     if historical_start_idx + lookback + pred_len <= len(df):
-        # Display lookback historical points + pred_len prediction points starting from specified position
         historical_df = df.iloc[historical_start_idx:historical_start_idx+lookback]
-        prediction_range = range(historical_start_idx+lookback, historical_start_idx+lookback+pred_len)
     else:
-        # If data is insufficient, adjust to maximum available range
         available_lookback = min(lookback, len(df) - historical_start_idx)
-        available_pred_len = min(pred_len, max(0, len(df) - historical_start_idx - available_lookback))
         historical_df = df.iloc[historical_start_idx:historical_start_idx+available_lookback]
-        prediction_range = range(historical_start_idx+available_lookback, historical_start_idx+available_lookback+available_pred_len)
     
-    # Create chart
-    fig = go.Figure()
+    # Build x-axis values
+    has_timestamps = 'timestamps' in historical_df.columns and len(historical_df) > 0
     
-    # Add historical data (candlestick chart)
-    fig.add_trace(go.Candlestick(
-        x=historical_df['timestamps'] if 'timestamps' in historical_df.columns else historical_df.index,
-        open=historical_df['open'],
-        high=historical_df['high'],
-        low=historical_df['low'],
-        close=historical_df['close'],
-        name='Historical Data (400 data points)',
-        increasing_line_color='#26A69A',
-        decreasing_line_color='#EF5350'
-    ))
+    if has_timestamps:
+        hist_x = historical_df['timestamps'].tolist()
+        # Calculate time interval for prediction timestamps
+        if len(df) > 1:
+            time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0]
+        else:
+            time_diff = pd.Timedelta(minutes=1)
+        last_ts = historical_df['timestamps'].iloc[-1]
+        pred_x = pd.date_range(start=last_ts + time_diff, periods=len(pred_df), freq=time_diff).tolist()
+    else:
+        hist_x = list(range(len(historical_df)))
+        pred_x = list(range(len(historical_df), len(historical_df) + len(pred_df)))
+
+    # Create traces as plain dicts for reliability
+    traces = []
     
-    # Add prediction data (candlestick chart)
+    # Historical candlestick
+    traces.append({
+        'type': 'candlestick',
+        'x': hist_x,
+        'open': historical_df['open'].tolist(),
+        'high': historical_df['high'].tolist(),
+        'low': historical_df['low'].tolist(),
+        'close': historical_df['close'].tolist(),
+        'name': 'Historical (400 pts)',
+        'increasing': {'line': {'color': '#26A69A'}},
+        'decreasing': {'line': {'color': '#EF5350'}}
+    })
+    
+    # Prediction candlestick
     if pred_df is not None and len(pred_df) > 0:
-        # Calculate prediction data timestamps - ensure continuity with historical data
-        if 'timestamps' in df.columns and len(historical_df) > 0:
-            # Start from the last timestamp of historical data, create prediction timestamps with the same time interval
-            last_timestamp = historical_df['timestamps'].iloc[-1]
-            time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0] if len(df) > 1 else pd.Timedelta(hours=1)
-            
-            pred_timestamps = pd.date_range(
-                start=last_timestamp + time_diff,
-                periods=len(pred_df),
-                freq=time_diff
-            )
-        else:
-            # If no timestamps, use index
-            pred_timestamps = range(len(historical_df), len(historical_df) + len(pred_df))
-        
-        fig.add_trace(go.Candlestick(
-            x=pred_timestamps,
-            open=pred_df['open'],
-            high=pred_df['high'],
-            low=pred_df['low'],
-            close=pred_df['close'],
-            name='Prediction Data (120 data points)',
-            increasing_line_color='#66BB6A',
-            decreasing_line_color='#FF7043'
-        ))
+        traces.append({
+            'type': 'candlestick',
+            'x': pred_x,
+            'open': pred_df['open'].tolist(),
+            'high': pred_df['high'].tolist(),
+            'low': pred_df['low'].tolist(),
+            'close': pred_df['close'].tolist(),
+            'name': 'Prediction (120 pts)',
+            'increasing': {'line': {'color': '#66BB6A'}},
+            'decreasing': {'line': {'color': '#FF7043'}}
+        })
     
-    # Add actual data for comparison (if exists)
+    # Actual data for comparison
     if actual_df is not None and len(actual_df) > 0:
-        # Actual data should be in the same time period as prediction data
-        if 'timestamps' in df.columns:
-            # Actual data should use the same timestamps as prediction data to ensure time alignment
-            if 'pred_timestamps' in locals():
-                actual_timestamps = pred_timestamps
-            else:
-                # If no prediction timestamps, calculate from the last timestamp of historical data
-                if len(historical_df) > 0:
-                    last_timestamp = historical_df['timestamps'].iloc[-1]
-                    time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0] if len(df) > 1 else pd.Timedelta(hours=1)
-                    actual_timestamps = pd.date_range(
-                        start=last_timestamp + time_diff,
-                        periods=len(actual_df),
-                        freq=time_diff
-                    )
-                else:
-                    actual_timestamps = range(len(historical_df), len(historical_df) + len(actual_df))
-        else:
-            actual_timestamps = range(len(historical_df), len(historical_df) + len(actual_df))
-        
-        fig.add_trace(go.Candlestick(
-            x=actual_timestamps,
-            open=actual_df['open'],
-            high=actual_df['high'],
-            low=actual_df['low'],
-            close=actual_df['close'],
-            name='Actual Data (120 data points)',
-            increasing_line_color='#FF9800',
-            decreasing_line_color='#F44336'
-        ))
+        traces.append({
+            'type': 'candlestick',
+            'x': pred_x[:len(actual_df)],
+            'open': actual_df['open'].tolist(),
+            'high': actual_df['high'].tolist(),
+            'low': actual_df['low'].tolist(),
+            'close': actual_df['close'].tolist(),
+            'name': 'Actual (120 pts)',
+            'increasing': {'line': {'color': '#FF9800'}},
+            'decreasing': {'line': {'color': '#F44336'}}
+        })
     
-    # Update layout
-    fig.update_layout(
-        title='Kronos Financial Prediction Results - 400 Historical Points + 120 Prediction Points vs 120 Actual Points',
-        xaxis_title='Time',
-        yaxis_title='Price',
-        template='plotly_white',
-        height=600,
-        showlegend=True,
-        xaxis_rangeslider_visible=False
-    )
+    layout = {
+        'title': 'Kronos Prediction Results',
+        'xaxis': {
+            'title': 'Time',
+            'rangeslider': {'visible': False}
+        },
+        'yaxis': {'title': 'Price'},
+        'template': 'plotly_white',
+        'height': 600,
+        'showlegend': True
+    }
     
-    return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+    chart = {'data': traces, 'layout': layout}
+    return json.dumps(chart, default=str)
 
 @app.route('/')
 def index():
