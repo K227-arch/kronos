@@ -46,6 +46,7 @@
         .main-content {
             display: grid;
             grid-template-columns: 1fr 2fr;
+            grid-template-rows: auto auto;
             gap: 30px;
             margin-bottom: 30px;
         }
@@ -56,6 +57,7 @@
             padding: 25px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             height: fit-content;
+            grid-row: 1 / -1;
         }
 
         .control-panel h2 {
@@ -579,6 +581,147 @@
                     <div class="spinner"></div>
                     <p>Processing, please wait...</p>
                 </div>
+
+                <!-- MT5 Trading Section (in left panel) -->
+                <hr style="margin: 20px 0; border: 1px solid #e2e8f0;">
+                <h2>🔴 Live Trading (MT5)</h2>
+                
+                <!-- Connection -->
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px; flex-wrap: wrap;">
+                    <button id="mt5-connect-btn" class="btn" onclick="mt5Connect()" style="width: auto; padding: 10px 20px;">
+                        🔌 Connect MT5
+                    </button>
+                    <span id="mt5-status" style="font-weight: 600; color: #e53e3e;">Disconnected</span>
+                </div>
+
+                <!-- Account Info -->
+                <div id="mt5-account-info" style="display: none; background: #f0fff4; border: 1px solid #c6f6d5; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px;">
+                        <div><strong>Name:</strong> <span id="mt5-name">-</span></div>
+                        <div><strong>Balance:</strong> <span id="mt5-balance">-</span></div>
+                        <div><strong>Equity:</strong> <span id="mt5-equity">-</span></div>
+                        <div><strong>Profit:</strong> <span id="mt5-profit">-</span></div>
+                        <div><strong>Leverage:</strong> <span id="mt5-leverage">-</span></div>
+                        <div><strong>Free Margin:</strong> <span id="mt5-margin-free">-</span></div>
+                    </div>
+                </div>
+
+                <!-- Trading Controls -->
+                <div id="mt5-trading-controls" style="display: none;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                        <div class="form-group">
+                            <label>Symbol:</label>
+                            <select id="mt5-symbol" style="width: 100%; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 13px;">
+                                <option value="EURUSD">EURUSD</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Timeframe:</label>
+                            <select id="mt5-timeframe" style="width: 100%; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 13px;">
+                                <option value="5m">5M</option>
+                                <option value="15m" selected>15M</option>
+                                <option value="30m">30M</option>
+                                <option value="1h">1H</option>
+                                <option value="4h">4H</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                        <div class="form-group">
+                            <label>Volume:</label>
+                            <input type="number" id="mt5-volume" value="0.01" min="0.01" max="1.0" step="0.01" style="width: 100%; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 13px;">
+                        </div>
+                        <div class="form-group">
+                            <label>SL (pips):</label>
+                            <input type="number" id="mt5-sl" value="50" min="10" max="500" style="width: 100%; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 13px;">
+                        </div>
+                        <div class="form-group">
+                            <label>TP (pips):</label>
+                            <input type="number" id="mt5-tp" value="100" min="10" max="500" style="width: 100%; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 13px;">
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                        <button class="btn" onclick="mt5PredictAndTrade(false)" style="width: 100%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); font-size: 13px; padding: 10px;">
+                            🔮 Predict
+                        </button>
+                        <button class="btn" onclick="mt5PredictAndTrade(true)" style="width: 100%; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); font-size: 13px; padding: 10px;">
+                            ⚡ Auto-Trade
+                        </button>
+                    </div>
+
+                    <!-- Signal Display -->
+                    <div id="mt5-signal-box" style="display: none; padding: 12px; border-radius: 8px; margin-bottom: 12px; text-align: center;">
+                        <div style="font-size: 20px; font-weight: 700;" id="mt5-signal-text">-</div>
+                        <div style="font-size: 12px; color: #4a5568;" id="mt5-signal-detail">-</div>
+                    </div>
+
+                    <!-- Open Positions -->
+                    <div id="mt5-positions-section">
+                        <h4 style="margin-bottom: 8px;">📋 Positions <button onclick="mt5RefreshPositions()" style="background: none; border: none; cursor: pointer; font-size: 12px;">🔄</button></h4>
+                        <div style="max-height: 150px; overflow-y: auto;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                                <thead>
+                                    <tr style="background: #f7fafc;">
+                                        <th style="padding: 4px; border: 1px solid #e2e8f0;">Symbol</th>
+                                        <th style="padding: 4px; border: 1px solid #e2e8f0;">Type</th>
+                                        <th style="padding: 4px; border: 1px solid #e2e8f0;">Vol</th>
+                                        <th style="padding: 4px; border: 1px solid #e2e8f0;">Profit</th>
+                                        <th style="padding: 4px; border: 1px solid #e2e8f0;">X</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="mt5-positions-tbody">
+                                    <tr><td colspan="5" style="padding: 8px; text-align: center; color: #a0aec0; font-size: 11px;">No positions</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Backtest Section -->
+                <hr style="margin: 20px 0; border: 1px solid #e2e8f0;">
+                <h2>📊 Backtest</h2>
+                <div id="backtest-controls">
+                    <p style="font-size: 12px; color: #718096; margin-bottom: 10px;">GBPUSD 15M | Jan 2025 - Feb 2026 | Kronos-base</p>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                        <button class="btn" onclick="startBacktest()" id="backtest-start-btn" style="width: 100%; background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); font-size: 13px; padding: 10px;">
+                            ▶️ Start Backtest
+                        </button>
+                        <button class="btn" onclick="stopBacktest()" id="backtest-stop-btn" style="width: 100%; background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); font-size: 13px; padding: 10px;" disabled>
+                            ⏹️ Stop
+                        </button>
+                    </div>
+
+                    <!-- Progress -->
+                    <div id="backtest-progress-section" style="display: none;">
+                        <div style="background: #e2e8f0; border-radius: 4px; height: 8px; margin-bottom: 8px;">
+                            <div id="backtest-progress-bar" style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: #718096;">
+                            <span id="backtest-step">Step 0/0</span>
+                            <span id="backtest-date">-</span>
+                            <span id="backtest-pct">0%</span>
+                        </div>
+                    </div>
+
+                    <!-- Stats -->
+                    <div id="backtest-stats" style="display: none; margin-top: 12px; background: #f7fafc; border-radius: 8px; padding: 12px; font-size: 12px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                            <div><strong>Trades:</strong> <span id="bt-total-trades">0</span></div>
+                            <div><strong>Win Rate:</strong> <span id="bt-win-rate">0%</span></div>
+                            <div><strong>Profit:</strong> <span id="bt-profit" style="font-weight: 700;">$0.00</span></div>
+                            <div><strong>Drawdown:</strong> <span id="bt-drawdown">0%</span></div>
+                            <div><strong>Wins:</strong> <span id="bt-wins" style="color: #38a169;">0</span></div>
+                            <div><strong>Losses:</strong> <span id="bt-losses" style="color: #e53e3e;">0</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Signals -->
+                    <div id="backtest-signals" style="display: none; margin-top: 10px; max-height: 120px; overflow-y: auto; font-size: 11px;">
+                    </div>
+                </div>
             </div>
 
             <div class="chart-container">
@@ -634,7 +777,42 @@
                         </div>
                     </div>
                 </div>
+
+                </div>
             </div>
+
+            <!-- MT5 Live Market Chart (right side, same level as MT5 trading controls) -->
+            <div class="chart-container" id="mt5-live-chart-section" style="display: none; grid-column: 2; align-self: start;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h2 style="margin: 0;">📊 Live Market (MT5)</h2>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <select id="mt5-chart-symbol" onchange="mt5UpdateLiveChart()" style="padding: 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
+                            <option value="EURUSD">EURUSD</option>
+                        </select>
+                        <select id="mt5-chart-timeframe" onchange="mt5UpdateLiveChart()" style="padding: 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
+                            <option value="1m">1M</option>
+                            <option value="5m">5M</option>
+                            <option value="15m" selected>15M</option>
+                            <option value="30m">30M</option>
+                            <option value="1h">1H</option>
+                            <option value="4h">4H</option>
+                        </select>
+                        <button onclick="mt5UpdateLiveChart()" style="background: #667eea; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                            🔄
+                        </button>
+                        <label style="font-size: 12px; display: flex; align-items: center; gap: 4px;">
+                            <input type="checkbox" id="mt5-auto-refresh" onchange="mt5ToggleAutoRefresh()">
+                            Auto (10s)
+                        </label>
+                    </div>
+                </div>
+                <div id="mt5-live-chart" style="min-height: 400px; border: 1px solid #e2e8f0; border-radius: 8px;"></div>
+                <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: #718096;">
+                    <span id="mt5-chart-info">-</span>
+                    <span id="mt5-chart-last-update">Last update: -</span>
+                </div>
+            </div>
+
         </div>
     </div>
 
@@ -667,6 +845,51 @@
             initializeTimeSlider();
             
             console.log('✅ Application initialization completed');
+
+            // Auto-setup: select EURUSD_15min, load best model, run prediction
+            await autoSetupAndPredict();
+        }
+
+        // Auto-select EURUSD_15min, load model with best params, predict
+        async function autoSetupAndPredict() {
+            try {
+                // Auto-select EURUSD_15min.csv from file list
+                const dataFileSelect = document.getElementById('data-file-select');
+                const options = Array.from(dataFileSelect.options);
+                const eurusdOption = options.find(opt => opt.textContent.includes('EURUSD_15min'));
+                
+                if (!eurusdOption) {
+                    console.log('EURUSD_15min.csv not found in data directory, skipping auto-predict');
+                    return;
+                }
+                
+                dataFileSelect.value = eurusdOption.value;
+                showStatus('info', 'Auto-loading EURUSD_15min.csv...');
+                await loadData();
+
+                // Auto-load kronos-mini (2048 context, fast)
+                const modelSelect = document.getElementById('model-select');
+                modelSelect.value = 'kronos-mini';
+                const deviceSelect = document.getElementById('device-select');
+                deviceSelect.value = 'cuda';
+                
+                showStatus('info', 'Auto-loading Kronos-mini model...');
+                await loadModel();
+
+                // Set best prediction parameters
+                document.getElementById('temperature').value = 0.8;
+                document.getElementById('temperature-value').textContent = '0.8';
+                document.getElementById('top-p').value = 0.85;
+                document.getElementById('top-p-value').textContent = '0.85';
+                document.getElementById('sample-count').value = 3;
+
+                // Auto-run prediction
+                showStatus('info', 'Starting auto-prediction...');
+                await startPrediction();
+                
+            } catch (error) {
+                console.error('Auto-setup failed:', error);
+            }
         }
 
         // Load available models
@@ -1279,6 +1502,429 @@
                 loadingDiv.classList.add('show');
             } else {
                 loadingDiv.classList.remove('show');
+            }
+        }
+
+        // ==================== MT5 TRADING FUNCTIONS ====================
+
+        async function mt5Connect() {
+            try {
+                const btn = document.getElementById('mt5-connect-btn');
+                btn.disabled = true;
+                btn.textContent = '⏳ Connecting...';
+
+                const response = await axios.post('/api/mt5/connect');
+                if (response.data.success) {
+                    document.getElementById('mt5-status').textContent = '🟢 Connected';
+                    document.getElementById('mt5-status').style.color = '#38a169';
+                    document.getElementById('mt5-account-info').style.display = 'block';
+                    document.getElementById('mt5-trading-controls').style.display = 'block';
+                    document.getElementById('mt5-live-chart-section').style.display = 'block';
+                    btn.textContent = '🔌 Disconnect';
+                    btn.onclick = mt5Disconnect;
+
+                    // Update account info
+                    const acc = response.data.account;
+                    document.getElementById('mt5-name').textContent = acc.name;
+                    document.getElementById('mt5-balance').textContent = `$${acc.balance.toFixed(2)}`;
+                    document.getElementById('mt5-equity').textContent = `$${acc.equity.toFixed(2)}`;
+                    document.getElementById('mt5-profit').textContent = `$${acc.profit.toFixed(2)}`;
+                    document.getElementById('mt5-leverage').textContent = `1:${acc.leverage}`;
+                    document.getElementById('mt5-margin-free').textContent = `$${acc.margin_free.toFixed(2)}`;
+
+                    // Load symbols
+                    await mt5LoadSymbols();
+                    // Load positions
+                    await mt5RefreshPositions();
+
+                    showStatus('success', `Connected to MT5: ${acc.name}`);
+                }
+            } catch (error) {
+                showStatus('error', `MT5 connection failed: ${error.response?.data?.error || error.message}`);
+            } finally {
+                document.getElementById('mt5-connect-btn').disabled = false;
+            }
+        }
+
+        async function mt5Disconnect() {
+            try {
+                await axios.post('/api/mt5/disconnect');
+                document.getElementById('mt5-status').textContent = '🔴 Disconnected';
+                document.getElementById('mt5-status').style.color = '#e53e3e';
+                document.getElementById('mt5-account-info').style.display = 'none';
+                document.getElementById('mt5-trading-controls').style.display = 'none';
+                document.getElementById('mt5-live-chart-section').style.display = 'none';
+                if (mt5AutoRefreshInterval) { clearInterval(mt5AutoRefreshInterval); mt5AutoRefreshInterval = null; }
+                const btn = document.getElementById('mt5-connect-btn');
+                btn.textContent = '🔌 Connect MT5';
+                btn.onclick = mt5Connect;
+                showStatus('info', 'Disconnected from MT5');
+            } catch (error) {
+                showStatus('error', 'Disconnect failed');
+            }
+        }
+
+        async function mt5LoadSymbols() {
+            try {
+                const response = await axios.get('/api/mt5/symbols');
+                if (response.data.success) {
+                    const symbols = response.data.symbols;
+                    
+                    // Populate trading symbol select
+                    const select = document.getElementById('mt5-symbol');
+                    select.innerHTML = '';
+                    symbols.forEach(s => {
+                        const opt = document.createElement('option');
+                        opt.value = s.name;
+                        opt.textContent = `${s.name} (${s.bid}/${s.ask})`;
+                        select.appendChild(opt);
+                    });
+
+                    // Populate chart symbol select
+                    const chartSelect = document.getElementById('mt5-chart-symbol');
+                    chartSelect.innerHTML = '';
+                    symbols.forEach(s => {
+                        const opt = document.createElement('option');
+                        opt.value = s.name;
+                        opt.textContent = s.name;
+                        chartSelect.appendChild(opt);
+                    });
+
+                    // Load initial live chart
+                    await mt5UpdateLiveChart();
+                }
+            } catch (error) {
+                console.error('Failed to load symbols:', error);
+            }
+        }
+
+        async function mt5PredictAndTrade(autoExecute) {
+            const symbol = document.getElementById('mt5-symbol').value;
+            const timeframe = document.getElementById('mt5-timeframe').value;
+            const volume = parseFloat(document.getElementById('mt5-volume').value);
+            const slPips = parseInt(document.getElementById('mt5-sl').value);
+            const tpPips = parseInt(document.getElementById('mt5-tp').value);
+
+            if (!symbol) {
+                showStatus('error', 'Please select a symbol');
+                return;
+            }
+
+            try {
+                showLoading(true);
+                showStatus('info', `${autoExecute ? 'Auto-trading' : 'Predicting'} ${symbol} (${timeframe})...`);
+
+                const response = await axios.post('/api/mt5/predict-and-trade', {
+                    symbol: symbol,
+                    timeframe: timeframe,
+                    auto_execute: autoExecute,
+                    volume: volume,
+                    sl_pips: slPips,
+                    tp_pips: tpPips
+                });
+
+                if (response.data.success) {
+                    const result = response.data;
+
+                    // Show signal
+                    const signalBox = document.getElementById('mt5-signal-box');
+                    const signalText = document.getElementById('mt5-signal-text');
+                    const signalDetail = document.getElementById('mt5-signal-detail');
+                    signalBox.style.display = 'block';
+
+                    if (result.signal === 'BUY') {
+                        signalBox.style.background = '#f0fff4';
+                        signalBox.style.border = '2px solid #38a169';
+                        signalText.textContent = `📈 BUY ${symbol}`;
+                        signalText.style.color = '#38a169';
+                    } else if (result.signal === 'SELL') {
+                        signalBox.style.background = '#fff5f5';
+                        signalBox.style.border = '2px solid #e53e3e';
+                        signalText.textContent = `📉 SELL ${symbol}`;
+                        signalText.style.color = '#e53e3e';
+                    } else {
+                        signalBox.style.background = '#fffff0';
+                        signalBox.style.border = '2px solid #d69e2e';
+                        signalText.textContent = `⏸️ HOLD ${symbol}`;
+                        signalText.style.color = '#d69e2e';
+                    }
+
+                    signalDetail.textContent = `Change: ${result.change_pct}% | Current: ${result.current_price.toFixed(5)} | Predicted Avg: ${result.predicted_avg_close.toFixed(5)}`;
+
+                    // Show chart
+                    if (result.chart) {
+                        const chartData = typeof result.chart === 'string' ? JSON.parse(result.chart) : result.chart;
+                        Plotly.newPlot('chart', chartData.data, chartData.layout, {responsive: true});
+                    }
+
+                    // Trade execution feedback
+                    if (result.trade_executed) {
+                        showStatus('success', `Trade executed: ${result.trade_message}`);
+                        await mt5RefreshPositions();
+                        // Refresh account
+                        const accResp = await axios.get('/api/mt5/account');
+                        if (accResp.data.success) {
+                            const acc = accResp.data.account;
+                            document.getElementById('mt5-balance').textContent = `$${acc.balance.toFixed(2)}`;
+                            document.getElementById('mt5-equity').textContent = `$${acc.equity.toFixed(2)}`;
+                            document.getElementById('mt5-profit').textContent = `$${acc.profit.toFixed(2)}`;
+                            document.getElementById('mt5-margin-free').textContent = `$${acc.margin_free.toFixed(2)}`;
+                        }
+                    } else if (autoExecute && result.signal === 'HOLD') {
+                        showStatus('info', 'Signal is HOLD - no trade executed');
+                    } else if (!autoExecute) {
+                        showStatus('success', `Signal: ${result.signal} (${result.change_pct}%)`);
+                    }
+                }
+            } catch (error) {
+                showStatus('error', `Failed: ${error.response?.data?.error || error.message}`);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function mt5RefreshPositions() {
+            try {
+                const response = await axios.get('/api/mt5/positions');
+                if (response.data.success) {
+                    const tbody = document.getElementById('mt5-positions-tbody');
+                    const positions = response.data.positions;
+
+                    if (positions.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5" style="padding: 8px; text-align: center; color: #a0aec0;">No open positions</td></tr>';
+                        return;
+                    }
+
+                    tbody.innerHTML = positions.map(p => `
+                        <tr>
+                            <td style="padding: 4px; border: 1px solid #e2e8f0;">${p.symbol}</td>
+                            <td style="padding: 4px; border: 1px solid #e2e8f0; color: ${p.type === 'BUY' ? '#38a169' : '#e53e3e'}; font-weight: 600;">${p.type}</td>
+                            <td style="padding: 4px; border: 1px solid #e2e8f0;">${p.volume}</td>
+                            <td style="padding: 4px; border: 1px solid #e2e8f0; color: ${p.profit >= 0 ? '#38a169' : '#e53e3e'}; font-weight: 600;">$${p.profit.toFixed(2)}</td>
+                            <td style="padding: 4px; border: 1px solid #e2e8f0;"><button onclick="mt5ClosePosition(${p.ticket})" style="background: #e53e3e; color: white; border: none; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 10px;">X</button></td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('Failed to load positions:', error);
+            }
+        }
+
+        async function mt5ClosePosition(ticket) {
+            if (!confirm(`Close position #${ticket}?`)) return;
+            try {
+                const response = await axios.post('/api/mt5/close-position', { ticket: ticket });
+                if (response.data.success) {
+                    showStatus('success', response.data.message);
+                    await mt5RefreshPositions();
+                } else {
+                    showStatus('error', response.data.error);
+                }
+            } catch (error) {
+                showStatus('error', `Close failed: ${error.response?.data?.error || error.message}`);
+            }
+        }
+
+        // ==================== MT5 LIVE CHART ====================
+
+        let mt5AutoRefreshInterval = null;
+
+        async function mt5UpdateLiveChart() {
+            const symbol = document.getElementById('mt5-chart-symbol').value;
+            const timeframe = document.getElementById('mt5-chart-timeframe').value;
+
+            try {
+                const response = await axios.post('/api/mt5/live-data', {
+                    symbol: symbol,
+                    timeframe: timeframe,
+                    bars: 200
+                });
+
+                if (response.data.success) {
+                    // Re-fetch the full data to build chart (the endpoint saved to temp file)
+                    const chartResponse = await axios.post('/api/mt5/live-chart-data', {
+                        symbol: symbol,
+                        timeframe: timeframe,
+                        bars: 200
+                    });
+
+                    if (chartResponse.data.success) {
+                        const data = chartResponse.data;
+                        
+                        const trace = {
+                            type: 'candlestick',
+                            x: data.dates,
+                            open: data.open,
+                            high: data.high,
+                            low: data.low,
+                            close: data.close,
+                            increasing: {line: {color: '#26A69A'}},
+                            decreasing: {line: {color: '#EF5350'}},
+                            name: symbol
+                        };
+
+                        // Add volume as bar chart on secondary y-axis
+                        const volumeTrace = {
+                            type: 'bar',
+                            x: data.dates,
+                            y: data.volume,
+                            name: 'Volume',
+                            marker: {color: 'rgba(102, 126, 234, 0.3)'},
+                            yaxis: 'y2'
+                        };
+
+                        const layout = {
+                            title: `${symbol} - ${timeframe.toUpperCase()} (Live)`,
+                            xaxis: {title: 'Time', rangeslider: {visible: false}},
+                            yaxis: {title: 'Price', side: 'right'},
+                            yaxis2: {title: 'Volume', overlaying: 'y', side: 'left', showgrid: false, range: [0, Math.max(...data.volume) * 4]},
+                            template: 'plotly_white',
+                            height: 400,
+                            showlegend: false,
+                            margin: {l: 60, r: 60, t: 40, b: 40}
+                        };
+
+                        Plotly.newPlot('mt5-live-chart', [trace, volumeTrace], layout, {responsive: true});
+
+                        // Update info
+                        const latest = response.data.latest;
+                        document.getElementById('mt5-chart-info').textContent = 
+                            `${symbol} | O: ${latest.open.toFixed(5)} H: ${latest.high.toFixed(5)} L: ${latest.low.toFixed(5)} C: ${latest.close.toFixed(5)}`;
+                        document.getElementById('mt5-chart-last-update').textContent = 
+                            `Last update: ${new Date().toLocaleTimeString()}`;
+                    }
+                }
+            } catch (error) {
+                console.error('Live chart update failed:', error);
+            }
+        }
+
+        function mt5ToggleAutoRefresh() {
+            const enabled = document.getElementById('mt5-auto-refresh').checked;
+            if (enabled) {
+                mt5UpdateLiveChart();
+                mt5AutoRefreshInterval = setInterval(mt5UpdateLiveChart, 10000);
+            } else {
+                if (mt5AutoRefreshInterval) {
+                    clearInterval(mt5AutoRefreshInterval);
+                    mt5AutoRefreshInterval = null;
+                }
+            }
+        }
+
+        // ==================== BACKTEST FUNCTIONS ====================
+
+        let backtestPollInterval = null;
+
+        async function startBacktest() {
+            try {
+                document.getElementById('backtest-start-btn').disabled = true;
+                document.getElementById('backtest-stop-btn').disabled = false;
+                document.getElementById('backtest-progress-section').style.display = 'block';
+                document.getElementById('backtest-stats').style.display = 'block';
+                document.getElementById('backtest-signals').style.display = 'block';
+
+                const response = await axios.post('/api/backtest/start', {
+                    symbol: 'GBPUSD',
+                    volume: parseFloat(document.getElementById('mt5-volume').value),
+                    sl_pips: parseInt(document.getElementById('mt5-sl').value),
+                    tp_pips: parseInt(document.getElementById('mt5-tp').value)
+                });
+
+                if (response.data.success) {
+                    showStatus('success', 'Backtest started! Watching real-time progress...');
+                    // Poll for updates every 2 seconds
+                    backtestPollInterval = setInterval(pollBacktestStatus, 2000);
+                } else {
+                    showStatus('error', response.data.error || response.data.message);
+                    document.getElementById('backtest-start-btn').disabled = false;
+                    document.getElementById('backtest-stop-btn').disabled = true;
+                }
+            } catch (error) {
+                showStatus('error', `Backtest failed: ${error.response?.data?.error || error.message}`);
+                document.getElementById('backtest-start-btn').disabled = false;
+                document.getElementById('backtest-stop-btn').disabled = true;
+            }
+        }
+
+        async function stopBacktest() {
+            try {
+                await axios.post('/api/backtest/stop');
+                showStatus('info', 'Backtest stopping...');
+            } catch (error) {
+                showStatus('error', 'Failed to stop backtest');
+            }
+        }
+
+        async function pollBacktestStatus() {
+            try {
+                const response = await axios.get('/api/backtest/status');
+                const state = response.data;
+
+                // Update progress
+                document.getElementById('backtest-progress-bar').style.width = state.progress + '%';
+                document.getElementById('backtest-step').textContent = `Step ${state.current_step}/${state.total_steps}`;
+                document.getElementById('backtest-date').textContent = state.current_date || '-';
+                document.getElementById('backtest-pct').textContent = state.progress + '%';
+
+                // Update stats
+                if (state.stats) {
+                    document.getElementById('bt-total-trades').textContent = state.stats.total_trades;
+                    document.getElementById('bt-win-rate').textContent = state.stats.win_rate + '%';
+                    const profit = state.stats.total_profit;
+                    const profitEl = document.getElementById('bt-profit');
+                    profitEl.textContent = `$${profit.toFixed(2)}`;
+                    profitEl.style.color = profit >= 0 ? '#38a169' : '#e53e3e';
+                    document.getElementById('bt-drawdown').textContent = state.stats.max_drawdown + '%';
+                    document.getElementById('bt-wins').textContent = state.stats.winning_trades;
+                    document.getElementById('bt-losses').textContent = state.stats.losing_trades;
+                }
+
+                // Update signals (show last 10)
+                if (state.signals && state.signals.length > 0) {
+                    const signalsDiv = document.getElementById('backtest-signals');
+                    const lastSignals = state.signals.slice(-10).reverse();
+                    signalsDiv.innerHTML = lastSignals.map(s => {
+                        const color = s.signal === 'BUY' ? '#38a169' : s.signal === 'SELL' ? '#e53e3e' : '#d69e2e';
+                        return `<div style="padding: 3px 0; border-bottom: 1px solid #edf2f7;"><span style="color: ${color}; font-weight: 600;">${s.signal}</span> ${s.change_pct}% @ ${s.date}</div>`;
+                    }).join('');
+                }
+
+                // Update positions in the positions table
+                if (state.positions) {
+                    const tbody = document.getElementById('mt5-positions-tbody');
+                    if (state.positions.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5" style="padding: 8px; text-align: center; color: #a0aec0;">No open positions</td></tr>';
+                    } else {
+                        tbody.innerHTML = state.positions.map(p => `
+                            <tr>
+                                <td style="padding: 4px; border: 1px solid #e2e8f0;">${p.symbol}</td>
+                                <td style="padding: 4px; border: 1px solid #e2e8f0; color: ${p.type === 'BUY' ? '#38a169' : '#e53e3e'}; font-weight: 600;">${p.type}</td>
+                                <td style="padding: 4px; border: 1px solid #e2e8f0;">${p.volume}</td>
+                                <td style="padding: 4px; border: 1px solid #e2e8f0; color: ${p.profit >= 0 ? '#38a169' : '#e53e3e'}; font-weight: 600;">$${p.profit.toFixed(2)}</td>
+                                <td style="padding: 4px; border: 1px solid #e2e8f0;"><button onclick="mt5ClosePosition(${p.ticket})" style="background: #e53e3e; color: white; border: none; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 10px;">X</button></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Check if done
+                if (state.status === 'completed' || state.status === 'stopped' || state.status === 'error') {
+                    clearInterval(backtestPollInterval);
+                    backtestPollInterval = null;
+                    document.getElementById('backtest-start-btn').disabled = false;
+                    document.getElementById('backtest-stop-btn').disabled = true;
+
+                    if (state.status === 'completed') {
+                        showStatus('success', `Backtest completed! ${state.stats.total_trades} trades, Win rate: ${state.stats.win_rate}%, Profit: $${state.stats.total_profit.toFixed(2)}`);
+                    } else if (state.status === 'error') {
+                        showStatus('error', `Backtest error: ${state.error}`);
+                    } else {
+                        showStatus('info', 'Backtest stopped');
+                    }
+                }
+            } catch (error) {
+                console.error('Poll failed:', error);
             }
         }
     </script>
