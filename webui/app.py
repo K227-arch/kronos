@@ -21,6 +21,23 @@ except ImportError:
     MODEL_AVAILABLE = False
     print("Warning: Kronos model cannot be imported, will use simulated data for demonstration")
 
+try:
+    from mt5_integration import mt5_conn
+    MT5_AVAILABLE = True
+except ImportError:
+    MT5_AVAILABLE = False
+    print("Warning: MT5 integration not available")
+
+try:
+    from backtest_engine import BacktestEngine
+    BACKTEST_AVAILABLE = True
+except ImportError:
+    BACKTEST_AVAILABLE = False
+    print("Warning: Backtest engine not available")
+
+# Global backtest instance
+backtest_engine = None
+
 app = Flask(__name__)
 CORS(app)
 
@@ -261,7 +278,7 @@ def create_prediction_chart(df, pred_df, lookback, pred_len, actual_df=None, his
             'decreasing': {'line': {'color': '#FF7043'}}
         })
     
-    # Actual data for comparison
+    # Actual data candlestick for comparison
     if actual_df is not None and len(actual_df) > 0:
         traces.append({
             'type': 'candlestick',
@@ -704,6 +721,306 @@ def get_model_status():
             'loaded': False,
             'message': 'Kronos model library not available, please install related dependencies'
         })
+
+# ==================== MT5 INTEGRATION ROUTES ====================
+
+@app.route('/api/mt5/connect', methods=['POST'])
+def mt5_connect():
+    """Connect to MetaTrader 5"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    success, message = mt5_conn.connect()
+    if success:
+        return jsonify({
+            'success': True,
+            'message': message,
+            'account': mt5_conn.account_info
+        })
+    else:
+        return jsonify({'error': message}), 400
+
+@app.route('/api/mt5/disconnect', methods=['POST'])
+def mt5_disconnect():
+    """Disconnect from MetaTrader 5"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    success, message = mt5_conn.disconnect()
+    return jsonify({'success': True, 'message': message})
+
+@app.route('/api/mt5/account')
+def mt5_account():
+    """Get MT5 account info"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    info = mt5_conn.get_account_info()
+    if info is None:
+        return jsonify({'error': 'Not connected to MT5'}), 400
+    return jsonify({'success': True, 'account': info})
+
+@app.route('/api/mt5/symbols')
+def mt5_symbols():
+    """Get available trading symbols"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    symbols = mt5_conn.get_symbols()
+    return jsonify({'success': True, 'symbols': symbols})
+
+@app.route('/api/mt5/live-data', methods=['POST'])
+def mt5_live_data():
+    """Pull live OHLCV data from MT5"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    data = request.get_json()
+    symbol = data.get('symbol', 'EURUSD')
+    timeframe = data.get('timeframe', '15m')
+    bars = int(data.get('bars', 520))
+    
+    df, error = mt5_conn.get_live_data(symbol, timeframe, bars)
+    if error:
+        return jsonify({'error': error}), 400
+    
+    # Save to temp file for prediction pipeline
+    temp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'live_data_temp.csv')
+    df.to_csv(temp_path, index=False)
+    
+    return jsonify({
+        'success': True,
+        'symbol': symbol,
+        'timeframe': timeframe,
+        'bars': len(df),
+        'file_path': temp_path,
+        'latest': {
+            'date': str(df['date'].iloc[-1]),
+            'open': float(df['open'].iloc[-1]),
+            'high': float(df['high'].iloc[-1]),
+            'low': float(df['low'].iloc[-1]),
+            'close': float(df['close'].iloc[-1]),
+            'volume': float(df['volume'].iloc[-1])
+        }
+    })
+
+@app.route('/api/mt5/positions')
+def mt5_positions():
+    """Get open positions"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    positions = mt5_conn.get_positions()
+    return jsonify({'success': True, 'positions': positions})
+
+@app.route('/api/mt5/trade', methods=['POST'])
+def mt5_trade():
+    """Execute a trade"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    data = request.get_json()
+    symbol = data.get('symbol', 'EURUSD')
+    action = data.get('action', '').upper()
+    volume = float(data.get('volume', 0.01))
+    sl_pips = int(data.get('sl_pips', 50))
+    tp_pips = int(data.get('tp_pips', 100))
+    
+    if action not in ('BUY', 'SELL'):
+        return jsonify({'error': 'Action must be BUY or SELL'}), 400
+    
+    success, message = mt5_conn.execute_trade(symbol, action, volume, sl_pips, tp_pips)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    else:
+        return jsonify({'error': message}), 400
+
+@app.route('/api/mt5/close-position', methods=['POST'])
+def mt5_close_position():
+    """Close a position"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    data = request.get_json()
+    ticket = int(data.get('ticket', 0))
+    
+    success, message = mt5_conn.close_position(ticket)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    else:
+        return jsonify({'error': message}), 400
+
+@app.route('/api/mt5/predict-and-trade', methods=['POST'])
+def mt5_predict_and_trade():
+    """Full pipeline: pull live data → predict → generate signal → optionally trade"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    if not MODEL_AVAILABLE or predictor is None:
+        return jsonify({'error': 'Kronos model not loaded'}), 400
+    
+    data = request.get_json()
+    symbol = data.get('symbol', 'EURUSD')
+    timeframe = data.get('timeframe', '15m')
+    auto_execute = data.get('auto_execute', False)
+    volume = float(data.get('volume', 0.01))
+    sl_pips = int(data.get('sl_pips', 50))
+    tp_pips = int(data.get('tp_pips', 100))
+    
+    # Pull live data
+    df, error = mt5_conn.get_live_data(symbol, timeframe, 520)
+    if error:
+        return jsonify({'error': f'Data pull failed: {error}'}), 400
+    
+    lookback = 400
+    pred_len = 120
+    
+    if len(df) < lookback:
+        return jsonify({'error': f'Insufficient data: {len(df)} bars, need {lookback}'}), 400
+    
+    # Prepare data for Kronos
+    df['timestamps'] = pd.to_datetime(df['date'])
+    required_cols = ['open', 'high', 'low', 'close']
+    if 'volume' in df.columns:
+        required_cols.append('volume')
+    
+    x_df = df.iloc[:lookback][required_cols]
+    x_timestamp = pd.Series(df.iloc[:lookback]['timestamps'].values, name='timestamps')
+    y_timestamp = pd.Series(df.iloc[lookback:lookback+pred_len]['timestamps'].values, name='timestamps') if len(df) >= lookback + pred_len else None
+    
+    # If not enough future timestamps, generate them
+    if y_timestamp is None or len(y_timestamp) < pred_len:
+        last_ts = df['timestamps'].iloc[lookback-1]
+        time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0]
+        future_ts = pd.date_range(start=last_ts + time_diff, periods=pred_len, freq=time_diff)
+        y_timestamp = pd.Series(future_ts, name='timestamps')
+    
+    # Run prediction
+    try:
+        pred_df = predictor.predict(
+            df=x_df,
+            x_timestamp=x_timestamp,
+            y_timestamp=y_timestamp,
+            pred_len=pred_len,
+            T=0.8,
+            top_p=0.85,
+            sample_count=3
+        )
+    except Exception as e:
+        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
+    
+    # Generate signal
+    signal, change_pct = mt5_conn.generate_signal(pred_df, df.iloc[:lookback])
+    
+    # Build chart
+    chart_json = create_prediction_chart(df, pred_df, lookback, pred_len, None, 0)
+    
+    result = {
+        'success': True,
+        'symbol': symbol,
+        'timeframe': timeframe,
+        'signal': signal,
+        'change_pct': round(change_pct, 4),
+        'current_price': float(df['close'].iloc[lookback-1]),
+        'predicted_avg_close': float(pred_df['close'].mean()),
+        'chart': chart_json,
+        'trade_executed': False
+    }
+    
+    # Auto-execute trade if enabled
+    if auto_execute and signal != 'HOLD':
+        success, message = mt5_conn.execute_trade(symbol, signal, volume, sl_pips, tp_pips)
+        result['trade_executed'] = success
+        result['trade_message'] = message
+    
+    return jsonify(result)
+
+@app.route('/api/mt5/status')
+def mt5_status():
+    """Get MT5 connection status"""
+    return jsonify({
+        'available': MT5_AVAILABLE,
+        'connected': mt5_conn.connected if MT5_AVAILABLE else False,
+        'account': mt5_conn.account_info if MT5_AVAILABLE else None
+    })
+
+@app.route('/api/mt5/live-chart-data', methods=['POST'])
+def mt5_live_chart_data():
+    """Get live OHLCV data formatted for chart rendering"""
+    if not MT5_AVAILABLE:
+        return jsonify({'error': 'MT5 integration not available'}), 400
+    
+    data = request.get_json()
+    symbol = data.get('symbol', 'EURUSD')
+    timeframe = data.get('timeframe', '15m')
+    bars = int(data.get('bars', 200))
+    
+    df, error = mt5_conn.get_live_data(symbol, timeframe, bars)
+    if error:
+        return jsonify({'error': error}), 400
+    
+    return jsonify({
+        'success': True,
+        'symbol': symbol,
+        'timeframe': timeframe,
+        'dates': df['date'].dt.strftime('%Y-%m-%d %H:%M').tolist(),
+        'open': df['open'].tolist(),
+        'high': df['high'].tolist(),
+        'low': df['low'].tolist(),
+        'close': df['close'].tolist(),
+        'volume': df['volume'].tolist()
+    })
+
+# ==================== BACKTEST ROUTES ====================
+
+@app.route('/api/backtest/start', methods=['POST'])
+def backtest_start():
+    """Start a backtest"""
+    global backtest_engine
+    
+    if not BACKTEST_AVAILABLE:
+        return jsonify({'error': 'Backtest engine not available'}), 400
+    if not MT5_AVAILABLE or not mt5_conn.connected:
+        return jsonify({'error': 'MT5 not connected'}), 400
+    if not MODEL_AVAILABLE or predictor is None:
+        return jsonify({'error': 'Model not loaded. Load Kronos-base first.'}), 400
+    
+    data = request.get_json()
+    symbol = data.get('symbol', 'GBPUSD')
+    volume = float(data.get('volume', 0.01))
+    sl_pips = int(data.get('sl_pips', 50))
+    tp_pips = int(data.get('tp_pips', 100))
+    
+    # Data path
+    data_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'GBPUSD_15m_backtest.csv')
+    if not os.path.exists(data_path):
+        return jsonify({'error': f'Backtest data not found: {data_path}'}), 400
+    
+    # Create and configure engine
+    backtest_engine = BacktestEngine(predictor, mt5_conn)
+    backtest_engine.volume = volume
+    backtest_engine.sl_pips = sl_pips
+    backtest_engine.tp_pips = tp_pips
+    
+    success, message = backtest_engine.start(data_path, symbol)
+    return jsonify({'success': success, 'message': message})
+
+@app.route('/api/backtest/stop', methods=['POST'])
+def backtest_stop():
+    """Stop the backtest"""
+    global backtest_engine
+    if backtest_engine is None:
+        return jsonify({'error': 'No backtest running'}), 400
+    success, message = backtest_engine.stop()
+    return jsonify({'success': success, 'message': message})
+
+@app.route('/api/backtest/status')
+def backtest_status():
+    """Get backtest state (polled by frontend for real-time updates)"""
+    global backtest_engine
+    if backtest_engine is None:
+        return jsonify({'status': 'idle', 'stats': {}})
+    return jsonify(backtest_engine.state)
 
 if __name__ == '__main__':
     print("Starting Kronos Web UI...")
