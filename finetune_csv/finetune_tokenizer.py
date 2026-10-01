@@ -307,7 +307,7 @@ def main():
         tokenizer = KronosTokenizer.from_pretrained(config.pretrained_tokenizer_path)
     else:
         print("pre_trained_tokenizer=False, randomly initializing Tokenizer architecture")
-        import json, os
+        import json
         cfg_path = os.path.join(config.pretrained_tokenizer_path, 'config.json')
         with open(cfg_path, 'r') as f:
             arch = json.load(f)

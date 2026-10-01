@@ -29,6 +29,22 @@ except ImportError:
     print("Warning: MT5 integration not available")
 
 try:
+    from textblob import TextBlob
+    SENTIMENT_AVAILABLE = True
+except ImportError:
+    SENTIMENT_AVAILABLE = False
+    print("Warning: TextBlob not available, sentiment analysis disabled")
+
+# Global sentiment state (shared with predict endpoint)
+current_sentiment = {
+    'score': 0.0,      # -1.0 (very bearish) to +1.0 (very bullish)
+    'signal': 'NEUTRAL',
+    'bias': 0.0,       # price bias percentage applied to predictions
+    'articles': 0,
+    'query': ''
+}
+
+try:
     from backtest_engine import BacktestEngine
     BACKTEST_AVAILABLE = True
 except ImportError:
@@ -510,6 +526,14 @@ def predict():
                     top_p=top_p,
                     sample_count=sample_count
                 )
+
+                # Apply news sentiment bias to predicted prices
+                if current_sentiment['bias'] != 0.0:
+                    price_cols = ['open', 'high', 'low', 'close']
+                    bias_factor = 1.0 + (current_sentiment['bias'] / 100.0)
+                    for col in price_cols:
+                        if col in pred_df.columns:
+                            pred_df[col] = pred_df[col] * bias_factor
                 
             except Exception as e:
                 return jsonify({'error': f'Kronos model prediction failed: {str(e)}'}), 500
@@ -642,7 +666,8 @@ def predict():
             'prediction_results': prediction_results,
             'actual_data': actual_data,
             'has_comparison': len(actual_data) > 0,
-            'message': f'Prediction completed, generated {pred_len} prediction points' + (f', including {len(actual_data)} actual data points for comparison' if len(actual_data) > 0 else '')
+            'sentiment': current_sentiment,
+            'message': f'Prediction completed, generated {pred_len} prediction points' + (f', including {len(actual_data)} actual data points for comparison' if len(actual_data) > 0 else '') + (f' | Sentiment bias: {current_sentiment["signal"]} ({current_sentiment["bias"]:+.2f}%)' if current_sentiment["bias"] != 0.0 else '')
         })
         
     except Exception as e:
@@ -850,6 +875,174 @@ def mt5_close_position():
     else:
         return jsonify({'error': message}), 400
 
+@app.route('/api/integrated-predict', methods=['POST'])
+def integrated_predict():
+    """
+    Full Gold prediction pipeline:
+    1. Pull latest XAUUSD data directly from MT5
+    2. Fetch Gold news sentiment (auto)
+    3. Run Kronos-base prediction with sentiment bias applied
+    Returns chart + prediction + sentiment + signal
+    """
+    global current_sentiment
+
+    if not MODEL_AVAILABLE or predictor is None:
+        return jsonify({'error': 'Kronos model not loaded. Load Kronos-base first.'}), 400
+
+    data = request.get_json() or {}
+    symbol    = data.get('symbol', 'XAUUSD')
+    timeframe = data.get('timeframe', '15m')
+    bars      = int(data.get('bars', 520))
+    temperature  = float(data.get('temperature', 0.7))
+    top_p        = float(data.get('top_p', 0.85))
+    sample_count = int(data.get('sample_count', 3))
+    lookback  = 400
+    pred_len  = 120
+
+    # ── Step 1: Pull live data from MT5 ──────────────────────────
+    if MT5_AVAILABLE and mt5_conn.connected:
+        df, error = mt5_conn.get_live_data(symbol, timeframe, bars)
+        if error:
+            return jsonify({'error': f'MT5 data pull failed: {error}'}), 400
+        data_source = f'Live MT5 ({symbol} {timeframe})'
+    else:
+        # Fallback to local XAUUSD file
+        xau_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'XAUUSD_15m.csv')
+        if not os.path.exists(xau_path):
+            return jsonify({'error': 'MT5 not connected and no local XAUUSD data found. Connect MT5 first.'}), 400
+        df, err = load_data_file(xau_path)
+        if err:
+            return jsonify({'error': err}), 400
+        data_source = 'Local XAUUSD_15m.csv'
+
+    # Rename 'date' to 'timestamps' if needed
+    if 'date' in df.columns and 'timestamps' not in df.columns:
+        df['timestamps'] = pd.to_datetime(df['date'])
+    df['timestamps'] = pd.to_datetime(df['timestamps'])
+
+    if len(df) < lookback + pred_len:
+        return jsonify({'error': f'Not enough data: {len(df)} bars, need {lookback + pred_len}'}), 400
+
+    # Use the most recent lookback bars
+    hist_df = df.iloc[-(lookback + pred_len):-(pred_len)].copy().reset_index(drop=True)
+    actual_window = df.iloc[-(pred_len):].copy().reset_index(drop=True)
+
+    required_cols = ['open', 'high', 'low', 'close']
+    if 'volume' in df.columns:
+        required_cols.append('volume')
+
+    x_df        = hist_df[required_cols].copy()
+    x_timestamp = pd.Series(hist_df['timestamps'].values, name='timestamps')
+    y_timestamp = pd.Series(actual_window['timestamps'].values, name='timestamps')
+
+    # ── Step 2: Auto-refresh news sentiment ───────────────────────
+    try:
+        import urllib.request, urllib.parse, xml.etree.ElementTree as ET
+        from textblob import TextBlob as _TB
+        gold_query = urllib.parse.quote('Gold XAUUSD price forecast')
+        url = f'https://news.google.com/rss/search?q={gold_query}&hl=en&gl=US&ceid=US:en'
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            root = ET.fromstring(resp.read())
+        polarity_sum = 0.0; count = 0
+        for item in root.iter('item'):
+            title = item.findtext('title', '')
+            desc  = item.findtext('description', '')
+            import re as _re
+            text = _re.sub(r'<[^>]+>', '', f"{title}. {desc}")
+            p = _TB(text).sentiment.polarity
+            macro_b = any(k in text.lower() for k in ['rate hike', 'hawkish', 'strong dollar'])
+            macro_u = any(k in text.lower() for k in ['rate cut', 'dovish', 'safe haven', 'recession'])
+            if macro_b: p -= 0.15
+            if macro_u: p += 0.15
+            polarity_sum += max(-1.0, min(1.0, p)); count += 1
+            if count >= 15: break
+        if count > 0:
+            avg = round(polarity_sum / count, 4)
+            sig = 'BULLISH' if avg > 0.12 else 'BEARISH' if avg < -0.12 else 'NEUTRAL'
+            current_sentiment.update({
+                'score': avg, 'signal': sig,
+                'bias': round(avg * 2.5, 4),
+                'articles': count, 'query': 'Gold XAUUSD'
+            })
+    except Exception as e:
+        print(f'News auto-refresh failed (non-fatal): {e}')
+
+    # ── Step 3: Run Kronos prediction ─────────────────────────────
+    try:
+        pred_df = predictor.predict(
+            df=x_df,
+            x_timestamp=x_timestamp,
+            y_timestamp=y_timestamp,
+            pred_len=pred_len,
+            T=temperature,
+            top_p=top_p,
+            sample_count=sample_count
+        )
+    except Exception as e:
+        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
+
+    # Apply sentiment bias
+    bias_pct = current_sentiment.get('bias', 0.0)
+    if bias_pct != 0.0:
+        factor = 1.0 + (bias_pct / 100.0)
+        for col in ['open', 'high', 'low', 'close']:
+            if col in pred_df.columns:
+                pred_df[col] = pred_df[col] * factor
+
+    # ── Step 4: Build chart and signal ───────────────────────────
+    chart_json = create_prediction_chart(df, pred_df, lookback, pred_len, actual_window, max(0, len(df) - lookback - pred_len))
+
+    last_close   = float(hist_df['close'].iloc[-1])
+    pred_avg     = float(pred_df['close'].mean())
+    change_pct   = (pred_avg - last_close) / last_close * 100
+    signal = 'BUY' if change_pct > 0.05 else 'SELL' if change_pct < -0.05 else 'HOLD'
+
+    # Blend with sentiment signal
+    if current_sentiment['signal'] == 'BULLISH' and signal == 'HOLD': signal = 'BUY'
+    if current_sentiment['signal'] == 'BEARISH' and signal == 'HOLD': signal = 'SELL'
+
+    prediction_results = []
+    for i, (_, row) in enumerate(pred_df.iterrows()):
+        prediction_results.append({
+            'timestamp': str(y_timestamp.iloc[i]) if i < len(y_timestamp) else f'T+{i}',
+            'open':   float(row['open']),
+            'high':   float(row['high']),
+            'low':    float(row['low']),
+            'close':  float(row['close']),
+            'volume': float(row['volume']) if 'volume' in row else 0,
+        })
+
+    actual_data = []
+    for i, (_, row) in enumerate(actual_window.iterrows()):
+        actual_data.append({
+            'timestamp': str(row['timestamps']),
+            'open':   float(row['open']),
+            'high':   float(row['high']),
+            'low':    float(row['low']),
+            'close':  float(row['close']),
+            'volume': float(row['volume']) if 'volume' in row else 0,
+        })
+
+    return jsonify({
+        'success': True,
+        'data_source': data_source,
+        'symbol': symbol,
+        'timeframe': timeframe,
+        'signal': signal,
+        'change_pct': round(change_pct, 4),
+        'current_price': last_close,
+        'predicted_avg_close': pred_avg,
+        'chart': chart_json,
+        'prediction_results': prediction_results,
+        'actual_data': actual_data,
+        'has_comparison': len(actual_data) > 0,
+        'sentiment': current_sentiment,
+        'prediction_type': f'Kronos-base | {data_source} | Sentiment: {current_sentiment["signal"]} ({bias_pct:+.2f}%)',
+        'message': f'✅ {symbol} prediction: {signal} | {change_pct:+.3f}% | News: {current_sentiment["signal"]}'
+    })
+
+
 @app.route('/api/mt5/predict-and-trade', methods=['POST'])
 def mt5_predict_and_trade():
     """Full pipeline: pull live data → predict → generate signal → optionally trade"""
@@ -986,15 +1179,17 @@ def backtest_start():
         return jsonify({'error': 'Model not loaded. Load Kronos-base first.'}), 400
     
     data = request.get_json()
-    symbol = data.get('symbol', 'GBPUSD')
+    symbol = data.get('symbol', 'XAUUSD')
     volume = float(data.get('volume', 0.01))
-    sl_pips = int(data.get('sl_pips', 50))
-    tp_pips = int(data.get('tp_pips', 100))
-    
-    # Data path
-    data_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'GBPUSD_15m_backtest.csv')
+    sl_pips = int(data.get('sl_pips', 200))   # Gold needs wider SL
+    tp_pips = int(data.get('tp_pips', 400))   # Gold needs wider TP
+
+    # Data path — prefer XAUUSD, fallback to GBPUSD
+    data_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', f'{symbol}_15m_backtest.csv')
     if not os.path.exists(data_path):
-        return jsonify({'error': f'Backtest data not found: {data_path}'}), 400
+        data_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'GBPUSD_15m_backtest.csv')
+    if not os.path.exists(data_path):
+        return jsonify({'error': f'Backtest data not found. Pull XAUUSD or GBPUSD 15m data first.'}), 400
     
     # Create and configure engine
     backtest_engine = BacktestEngine(predictor, mt5_conn)
@@ -1021,6 +1216,151 @@ def backtest_status():
     if backtest_engine is None:
         return jsonify({'status': 'idle', 'stats': {}})
     return jsonify(backtest_engine.state)
+
+# ==================== NEWS SENTIMENT ROUTES ====================
+
+@app.route('/api/news/fetch', methods=['POST'])
+def news_fetch():
+    """Fetch Gold/XAUUSD financial news and analyse sentiment"""
+    global current_sentiment
+
+    if not SENTIMENT_AVAILABLE:
+        return jsonify({'error': 'TextBlob not installed'}), 400
+
+    import urllib.request, urllib.parse, xml.etree.ElementTree as ET
+
+    data = request.get_json()
+    query = data.get('query', 'Gold XAUUSD').strip()
+
+    articles = []
+
+    GOLD_KEYWORDS = ['gold', 'xauusd', 'xau', 'bullion', 'precious metal',
+                     'safe haven', 'inflation', 'fed', 'interest rate',
+                     'dollar', 'fomc', 'cpi', 'nfp', 'rate hike']
+
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+    # ── 1. Google News RSS (Gold focused) ─────────────────────────
+    gold_searches = [
+        f"Gold price XAUUSD {query}",
+        "Gold XAU inflation Fed rate",
+        "XAUUSD forecast bullion"
+    ]
+    for search in gold_searches:
+        try:
+            encoded = urllib.parse.quote(search)
+            url = f"https://news.google.com/rss/search?q={encoded}&hl=en&gl=US&ceid=US:en"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                xml_data = resp.read()
+            root = ET.fromstring(xml_data)
+            for item in root.iter('item'):
+                title   = item.findtext('title', '').strip()
+                desc    = item.findtext('description', '').strip()
+                link    = item.findtext('link', '').strip()
+                pub     = item.findtext('pubDate', '').strip()
+                if not title:
+                    continue
+                # Clean HTML tags from description
+                import re as _re
+                desc_clean = _re.sub(r'<[^>]+>', '', desc)[:200]
+                text = f"{title}. {desc_clean}"
+                blob = TextBlob(text)
+                polarity = blob.sentiment.polarity
+                lower = text.lower()
+                is_gold = any(k in lower for k in ['gold', 'xauusd', 'xau', 'bullion'])
+                # Apply gold correlation for macro events
+                macro_bearish = any(k in lower for k in ['rate hike', 'hawkish', 'strong dollar', 'nfp beat', 'jobs beat'])
+                macro_bullish = any(k in lower for k in ['rate cut', 'dovish', 'weak dollar', 'inflation surge', 'recession', 'safe haven'])
+                if macro_bearish: polarity -= 0.15
+                if macro_bullish: polarity += 0.15
+                polarity = max(-1.0, min(1.0, polarity))
+                # Skip if duplicate title
+                if any(a['title'][:50] == title[:50] for a in articles):
+                    continue
+                articles.append({
+                    'title': title[:150],
+                    'link': link,
+                    'published': pub,
+                    'polarity': round(float(polarity), 4),
+                    'subjectivity': round(float(blob.sentiment.subjectivity), 4),
+                    'snippet': desc_clean,
+                    'relevance': 'gold' if is_gold else 'macro',
+                    'source': 'Google News'
+                })
+                if len(articles) >= 20:
+                    break
+        except Exception as e:
+            print(f"Google News error: {e}")
+        if len(articles) >= 20:
+            break
+
+    # ── 2. Yahoo Finance RSS (Gold/commodity news) ───────────────
+    if len(articles) < 10:
+        try:
+            url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=GC=F&region=US&lang=en-US"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                xml_data = resp.read()
+            root = ET.fromstring(xml_data)
+            for item in root.iter('item'):
+                title = item.findtext('title', '').strip()
+                desc  = item.findtext('description', '').strip()
+                link  = item.findtext('link', '').strip()
+                pub   = item.findtext('pubDate', '').strip()
+                if not title or any(a['title'][:50] == title[:50] for a in articles):
+                    continue
+                text = f"{title}. {desc}"
+                blob = TextBlob(text)
+                articles.append({
+                    'title': title[:150],
+                    'link': link,
+                    'published': pub,
+                    'polarity': round(float(blob.sentiment.polarity), 4),
+                    'subjectivity': round(float(blob.sentiment.subjectivity), 4),
+                    'snippet': desc[:200],
+                    'relevance': 'gold',
+                    'source': 'Yahoo Finance'
+                })
+                if len(articles) >= 25:
+                    break
+        except Exception as e:
+            print(f"Yahoo Finance error: {e}")
+
+    if not articles:
+        return jsonify({'error': 'Could not fetch news. Please check your internet connection and try again.'}), 404
+
+    # Sort: gold-relevant first, then strongest sentiment
+    articles.sort(key=lambda a: (0 if a.get('relevance') == 'gold' else 1, -abs(a['polarity'])))
+    articles = articles[:20]
+
+    # Weighted sentiment — gold articles count 2x
+    weighted_sum = sum(a['polarity'] * (2.0 if a.get('relevance') == 'gold' else 1.0) for a in articles)
+    weight_total = sum(2.0 if a.get('relevance') == 'gold' else 1.0 for a in articles)
+    avg_polarity = round(weighted_sum / weight_total, 4) if weight_total > 0 else 0.0
+
+    signal = 'BULLISH' if avg_polarity > 0.12 else 'BEARISH' if avg_polarity < -0.12 else 'NEUTRAL'
+    bias   = round(avg_polarity * 2.5, 4)  # max ±2.5% for Gold
+
+    current_sentiment.update({
+        'score': avg_polarity, 'signal': signal,
+        'bias': bias, 'articles': len(articles), 'query': query
+    })
+
+    return jsonify({'success': True, 'query': query, 'articles': articles, 'sentiment': current_sentiment})
+@app.route('/api/news/sentiment')
+def news_sentiment():
+    """Return current cached sentiment"""
+    return jsonify(current_sentiment)
+
+
+@app.route('/api/news/clear', methods=['POST'])
+def news_clear():
+    """Clear sentiment bias"""
+    global current_sentiment
+    current_sentiment = {'score': 0.0, 'signal': 'NEUTRAL', 'bias': 0.0, 'articles': 0, 'query': ''}
+    return jsonify({'success': True, 'message': 'Sentiment cleared'})
+
 
 if __name__ == '__main__':
     print("Starting Kronos Web UI...")

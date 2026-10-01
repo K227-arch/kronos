@@ -25,8 +25,8 @@ class BacktestEngine:
 
         # Backtest parameters
         self.lookback = 400
-        self.pred_len = 120
-        self.step_size = 120  # Move forward by pred_len after each prediction
+        self.pred_len = 60  # Shorter prediction for Kronos-base (512 context)
+        self.step_size = 60  # Move forward by pred_len after each prediction
         self.temperature = 0.8
         self.top_p = 0.85
         self.sample_count = 3
@@ -129,15 +129,27 @@ class BacktestEngine:
                 if "volume" in df.columns:
                     required_cols.append("volume")
 
-                x_df = hist_df[required_cols].copy()
-                x_timestamp = pd.Series(hist_df["timestamps"].values, name="timestamps")
+                x_df = hist_df[required_cols].copy().reset_index(drop=True)
+                x_timestamp = pd.Series(hist_df["timestamps"].values, name="timestamps").reset_index(drop=True)
 
                 # Future timestamps
                 future_df = df.iloc[end_idx:end_idx + self.pred_len]
-                y_timestamp = pd.Series(future_df["timestamps"].values, name="timestamps")
+                y_timestamp = pd.Series(future_df["timestamps"].values, name="timestamps").reset_index(drop=True)
+
+                # Ensure y_timestamp has exactly pred_len entries
+                if len(y_timestamp) < self.pred_len:
+                    last_ts = x_timestamp.iloc[-1]
+                    time_diff = x_timestamp.iloc[1] - x_timestamp.iloc[0]
+                    future_ts = pd.date_range(start=last_ts + time_diff, periods=self.pred_len, freq=time_diff)
+                    y_timestamp = pd.Series(future_ts, name="timestamps")
 
                 # Run prediction
                 try:
+                    # Ensure all inputs have consistent lengths
+                    actual_len = min(len(x_df), len(x_timestamp))
+                    x_df = x_df.iloc[:actual_len].reset_index(drop=True)
+                    x_timestamp = x_timestamp.iloc[:actual_len].reset_index(drop=True)
+                    
                     pred_df = self.predictor.predict(
                         df=x_df,
                         x_timestamp=x_timestamp,

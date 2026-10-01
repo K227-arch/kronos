@@ -1,0 +1,56 @@
+# Config for fine-tuning Kronos tokenizer on GBPUSD 15m K-line data
+
+data:
+  data_path: "data/GBPUSD_15m_kline.csv"
+  lookback_window: 400
+  predict_window: 60
+  max_context: 512
+  clip: 5.0
+  train_ratio: 0.9
+  val_ratio: 0.1
+  test_ratio: 0.0
+
+training:
+  tokenizer_epochs: 10
+  basemodel_epochs: 10
+  batch_size: 16
+  log_interval: 20
+  num_workers: 0
+  seed: 42
+
+  tokenizer_learning_rate: 0.0002
+  predictor_learning_rate: 0.000001
+
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_weight_decay: 0.1
+
+  accumulation_steps: 1
+
+model_paths:
+  # HuggingFace IDs work directly (auto-downloaded / cached)
+  pretrained_tokenizer: "NeoQuasar/Kronos-Tokenizer-base"
+  pretrained_predictor: "NeoQuasar/Kronos-base"
+
+  exp_name: "GBPUSD_15m"
+  base_path: "finetuned"
+
+  base_save_path: ""
+  finetuned_tokenizer: ""
+
+  tokenizer_save_name: "tokenizer"
+  basemodel_save_name: "basemodel"
+
+experiment:
+  name: "kronos_gbpusd_finetune"
+  description: "Fine-tune Kronos tokenizer on GBPUSD 15m forex K-line data"
+  use_comet: false
+
+  train_tokenizer: true
+  train_basemodel: false
+
+  skip_existing: false
+
+device:
+  use_cuda: true
+  device_id: 0

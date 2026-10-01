@@ -208,7 +208,7 @@ class MT5Connection:
             "magic": 123456,
             "comment": "Kronos AI Trade",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": mt5.ORDER_FILLING_RETURN,
         }
 
         result = mt5.order_send(request)
@@ -264,7 +264,7 @@ class MT5Connection:
             "magic": 123456,
             "comment": "Kronos Close",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": mt5.ORDER_FILLING_RETURN,
         }
 
         result = mt5.order_send(request)
